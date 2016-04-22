@@ -1,0 +1,182 @@
+#!/bin/sh
+
+# Inspired by https://www.xkcd.com/1654/
+# and http://www.ocsmag.com/2016/04/16/universal-install-script-by-xkcd-combat-test/
+# DO NOT USE OR RUN THIS!
+# Unless you have read it and understand the risks
+# You will be running untrusted code on your machine!
+# You have been warned!
+
+USAGE="Usage: $0 (search|install) [-s site] package" 
+NAME="yapm" # used for creating config directories
+DATA_HOME="${XDG_DATA_HOME:-${HOME?Error must be set}/.local/share}/$NAME"
+
+BOOTSTRAP="$DATA_HOME/bootstrap"
+TREE_DIR="$DATA_HOME/tree"
+SITE_DIR="$DATA_HOME/github.com"
+PATH="$TREE_DIR/bin:$TREE_DIR/usr/bin:$PATH" # so we can see things we've bootstrapped first
+
+#Default Options
+SITE="github"
+FUCK_IT=0
+DOWNLOAD_ONLY=1
+
+CLONE_FLAGS="--depth 1"
+CURL_FLAGS="-s" # useful to set to -v when debugging
+github_api="https://api.github.com"
+
+# Minimal requirements for bootstraping
+CURL="$(which curl)"
+CC="$(which gcc)"
+MAKE="$(which make)"
+GIT="$(which git)"
+# Autotools
+# External Programs Used
+AWK="$(which awk)"
+JQ="$(which jq)"
+
+if [ "$1" = "help" ] || [ -z "$2" ];then
+    echo $USAGE
+fi
+
+if [ "$(id -u)" = 0 ];then
+    echo "$0 must be run as a non-root user!"
+    exit 0
+fi
+
+# Command line option parsing
+while getopts "ns:" opt; do
+    case $opt in
+        f)  FUCK_IT=1
+            ;;
+        s)  SITE="$OPTARG"
+            echo $OPTARG
+            ;;
+        n)  DOWNLOAD_ONLY=1
+            ;;
+        \?)  
+            echo "$0: Unknown option -$OPTARG"
+            echo "$USAGE"
+            ;;
+    esac
+done
+
+scd() { # safe cd - create directory then cd
+    mkdir -p "$1"
+    cd "$1"
+}
+
+git_install()
+{
+    repo_lang=$($CURL $CURL_FLAGS "$github_api/repos/$1/languages" | jq 'keys_unsorted [0]' | tr -d \")
+    if [ "$repo_lang" = "message" ];then
+        echo "Error: Repository $1 not found!"
+        return
+    fi
+    user_name=$(echo $1 | "$AWK" -F'/' '{print $1}') #TODO make more efficient here
+    dir_name=$(echo $1 | "$AWK" -F'/' '{print $2}')
+    scd "$SITE_DIR/$user_name"
+    "$GIT" clone "https://github.com/$1" "$CLONE_FLAGS" # cloning an untrusted git repo can lead to CVE-2015-7545 on some systems
+
+    if [ "$DOWNLOAD_ONLY" -eq 1 ];then
+        return
+    fi
+
+    cd "$dir_name"
+    # Use Cmake to install
+    if [ -f CMakeLists.txt ];then
+        scd build
+        cmake -DCMAKE_INSTALL_PREFIX="$TREE_DIR" ..
+        make
+        make install
+    else
+        echo "Looks like $1 is written primarily in $repo_lang."
+        case $repo_lang in
+            "C")
+                [ -f configure ] && ./configure --prefix="$TREE_DIR"
+                make
+                make install
+                ;;
+            "javascript")
+                npm install .
+                ;;
+            "Rust")
+                cargo build
+                ;;
+            *)  # First try an install script then we're gonna punt and run all
+                # the executables in the directory followed by make.
+                if [ -f install.sh ];then
+                    #./install.sh
+                    echo
+                else
+                    if [ $FUCK_IT -eq 1 ];then
+                        # Oh what a beautiful footgun!
+                        find . -maxdepth 1 -executable -type f -exec {} \;
+                        make
+                    fi
+                fi
+                ;;
+        esac
+    fi
+}
+
+bootstrap_autoconf()
+{
+    cd "$BOOTSTRAP"
+    curl 'ftp://ftp.gnu.org/gnu/autoconf/autoconf-latest.tar.gz' -o autoconf.tar.gz
+    tar xzvf autoconf.tar.gz
+    cd autoconf-*
+    ./configure --prefix="$TREE_DIR"
+    make
+    make install
+    cd ..
+}
+
+bootstrap_jq()
+{
+    if [ -z "$(which autoreconf)" ];then # bootstraping dependency
+        bootstrap_autoconf
+    fi
+    cd "$BOOTSTRAP"
+    "$GIT" clone https://github.com/stedolan/jq.git "$CLONE_FLAGS"
+    cd jq
+    autoreconf -i # TODO Figure out the best way to avoid this dependency
+    ./configure --disable-maintainer-mode --prefix="$TREE_DIR"
+    make 
+    make install
+    cd ..
+}
+
+main() {
+    mkdir -p "$TREE_DIR"
+
+    if [ -z "$JQ" ] && [ "$2" != "bootstrap" ];then
+        echo "$NAME requires jq is installed. Try bootstrapping."
+        exit 0
+    fi
+
+    if [ "$1" = "bootstrap"  ];then
+        mkdir -p "$BOOTSTRAP"
+        bootstrap_jq
+    fi
+
+    if [ "$1" = "search"  ];then
+        query=$(echo "$2" | tr ' ' '+')
+        "$CURL" $CURL_FLAGS "$github_api/search/repositories?q=$query" | jq -rM '.items[] | .full_name + " - " + .description'
+    fi
+
+    if [ "$1" = "install"  ];then
+        mkdir -p "$DATA_HOME"
+        if echo "$2" | grep -q '/';then      # only try to do the git install if the argument has a slash
+            git_install "$2"
+            echo
+        fi
+    fi
+
+    # Uninstalling is not yet a supported feature
+    if [ "$1" = "uninstall"  ];then
+        echo
+    fi
+}
+#echo "$@"
+main "$@"

@@ -1,0 +1,53 @@
+ _   _  __ _ _ __  _ __ ___  
+| | | |/ _` | '_ \| '_ ` _ \ 
+| |_| | (_| | |_) | | | | | |
+ \__, |\__,_| .__/|_| |_| |_|
+ |___/      |_|              
+
+
+Yet Another Package Manager
+
+May still undergo a name change. I'm open to suggestions.
+
+The goal of yapm is to have a package manager that is able
+to portably install software from various sources on the
+internet with minimal effort by the user. It was inspired
+by the xkcd universal install script.
+
+Let's define portable: I want it to be able to work on
+a variety of Unix Systems: Mac, Linux, *BSD without the
+need of manually installing any software.
+
+For now the user can handle installing libraries for
+any software that they may need.
+
+Supported Sources:
+github
+
+Future Goals:
+gitlab
+gnu ftp sites
+
+Ideas for flags
+
+-s, --source
+    will set the source to find the code from
+
+Ex.
+    yapm -s github libc
+
+
+We should read a configuration file to see
+which source we should search by default.
+
+No config just use github.
+
+We should also start building all of the software in a chroot.
+Is this supported on all Unixes? Other problems with this is
+it would require that yapm be run with root privledges. The
+user may not have those privileges. This could be an option
+
+-r
+    Build the program in it's own chroot. (requires superuser privledges)
+
+
