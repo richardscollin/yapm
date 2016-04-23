@@ -17,58 +17,39 @@ SITE_DIR="$DATA_HOME/github.com"
 PATH="$TREE_DIR/bin:$TREE_DIR/usr/bin:$PATH" # so we can see things we've bootstrapped first
 
 #Default Options
-SITE="github"
+SITE="github.com"
 FUCK_IT=0
 DOWNLOAD_ONLY=1
 
+# Debug Strings
 CLONE_FLAGS="--depth 1"
 CURL_FLAGS="-s" # useful to set to -v when debugging
 github_api="https://api.github.com"
-
-# Minimal requirements for bootstraping
-CURL="$(which curl)"
-CC="$(which gcc)"
-MAKE="$(which make)"
-GIT="$(which git)"
-# Autotools
-# External Programs Used
-AWK="$(which awk)"
-JQ="$(which jq)"
-
-if [ "$1" = "help" ] || [ -z "$2" ];then
-    echo $USAGE
-fi
-
-if [ "$(id -u)" = 0 ];then
-    echo "$0 must be run as a non-root user!"
-    exit 0
-fi
-
-# Command line option parsing
-while getopts "ns:" opt; do
-    case $opt in
-        f)  FUCK_IT=1
-            ;;
-        s)  SITE="$OPTARG"
-            echo $OPTARG
-            ;;
-        n)  DOWNLOAD_ONLY=1
-            ;;
-        \?)  
-            echo "$0: Unknown option -$OPTARG"
-            echo "$USAGE"
-            ;;
-    esac
-done
 
 scd() { # safe cd - create directory then cd
     mkdir -p "$1"
     cd "$1"
 }
 
-git_install()
-{
-    repo_lang=$($CURL $CURL_FLAGS "$github_api/repos/$1/languages" | jq 'keys_unsorted [0]' | tr -d \")
+check_for_programs() {
+    for prog in curl cc make git awk jq;do
+        if ! $prog --version &>/dev/null;then
+            echo "$0: command not found $prog"
+            exit 1
+        fi
+    done
+}
+
+github_search() {
+    query=$(echo "$1" | tr ' ' '+')
+    curl $CURL_FLAGS "$github_api/search/repositories?q=$query" | jq -rM '.items[] | .full_name + " - " + .description'
+}
+
+github_fetch() {
+    if ! echo "$2" | grep -q '/';then      # only try to do the git install if the argument has a slash
+        return
+    fi
+    repo_lang=$(curl $CURL_FLAGS "$github_api/repos/$1/languages" | jq 'keys_unsorted [0]' | tr -d \")
     if [ "$repo_lang" = "message" ];then
         echo "Error: Repository $1 not found!"
         return
@@ -76,12 +57,28 @@ git_install()
     user_name=$(echo $1 | "$AWK" -F'/' '{print $1}') #TODO make more efficient here
     dir_name=$(echo $1 | "$AWK" -F'/' '{print $2}')
     scd "$SITE_DIR/$user_name"
-    "$GIT" clone "https://github.com/$1" "$CLONE_FLAGS" # cloning an untrusted git repo can lead to CVE-2015-7545 on some systems
+    git clone "https://github.com/$1" "$CLONE_FLAGS" # cloning an untrusted git repo can lead to CVE-2015-7545 on some systems
+}
 
-    if [ "$DOWNLOAD_ONLY" -eq 1 ];then
-        return
-    fi
+search() {
+    case $SITE in
+        "github.com")  github_search "$@"
+            ;;
+        *)  echo "$0: Site $SITE not supported."
+            ;;
+    esac
+}
 
+fetch() {
+    case $SITE in
+        "github.com") github_fetch "$@"
+            ;;
+        *)  echo "$0: Site $SITE not supported."
+            ;;
+    esac
+}
+
+build() {
     cd "$dir_name"
     # Use Cmake to install
     if [ -f CMakeLists.txt ];then
@@ -120,8 +117,7 @@ git_install()
     fi
 }
 
-bootstrap_autoconf()
-{
+bootstrap_autoconf() {
     cd "$BOOTSTRAP"
     curl 'ftp://ftp.gnu.org/gnu/autoconf/autoconf-latest.tar.gz' -o autoconf.tar.gz
     tar xzvf autoconf.tar.gz
@@ -132,13 +128,12 @@ bootstrap_autoconf()
     cd ..
 }
 
-bootstrap_jq()
-{
+bootstrap_jq() {
     if [ -z "$(which autoreconf)" ];then # bootstraping dependency
         bootstrap_autoconf
     fi
     cd "$BOOTSTRAP"
-    "$GIT" clone https://github.com/stedolan/jq.git "$CLONE_FLAGS"
+    git clone https://github.com/stedolan/jq.git "$CLONE_FLAGS"
     cd jq
     autoreconf -i # TODO Figure out the best way to avoid this dependency
     ./configure --disable-maintainer-mode --prefix="$TREE_DIR"
@@ -148,35 +143,56 @@ bootstrap_jq()
 }
 
 main() {
-    mkdir -p "$TREE_DIR"
+    mkdir -p "$DATA_HOME"
+    COMMAND=$1
 
-    if [ -z "$JQ" ] && [ "$2" != "bootstrap" ];then
-        echo "$NAME requires jq is installed. Try bootstrapping."
-        exit 0
-    fi
-
-    if [ "$1" = "bootstrap"  ];then
-        mkdir -p "$BOOTSTRAP"
-        bootstrap_jq
-    fi
-
-    if [ "$1" = "search"  ];then
-        query=$(echo "$2" | tr ' ' '+')
-        "$CURL" $CURL_FLAGS "$github_api/search/repositories?q=$query" | jq -rM '.items[] | .full_name + " - " + .description'
-    fi
-
-    if [ "$1" = "install"  ];then
-        mkdir -p "$DATA_HOME"
-        if echo "$2" | grep -q '/';then      # only try to do the git install if the argument has a slash
-            git_install "$2"
-            echo
-        fi
-    fi
-
-    # Uninstalling is not yet a supported feature
-    if [ "$1" = "uninstall"  ];then
-        echo
-    fi
+    case $COMMAND in
+        bootstrap)
+            mkdir -p "$BOOTSTRAP"
+            bootstrap_jq
+            ;;
+        search)
+            search "$@"
+            ;;
+        install)
+            mkdir -p "$TREE_DIR"
+            fetch "$@"
+            if [ "$DOWNLOAD_ONLY" -ne 1 ];then
+                build "$@"
+            fi
+            ;;
+        uninstall)
+            echo uninstall not yet supported
+            ;;
+        *)
+            echo "$USAGE"
+            exit 1
+            ;;
+    esac
 }
-#echo "$@"
+
+if [ "$(id -u)" = 0 ];then
+    echo "$0 must be run as a non-root user!"
+    exit 0
+fi
+
+# Command line option parsing
+while getopts "ns:" opt; do
+    case $opt in
+        f)  FUCK_IT=1
+            ;;
+        s)  SITE="$OPTARG"
+            echo $OPTARG
+            ;;
+        n)  DOWNLOAD_ONLY=1
+            ;;
+        \?)  
+            echo "$0: Unknown option -$OPTARG"
+            echo "$USAGE"
+            ;;
+    esac
+done
+
+check_for_programs
 main "$@"
+
