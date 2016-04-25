@@ -1,4 +1,6 @@
 #!/bin/sh
+set -eu
+#set -x
 
 # Inspired by https://www.xkcd.com/1654/
 # and http://www.ocsmag.com/2016/04/16/universal-install-script-by-xkcd-combat-test/
@@ -7,7 +9,10 @@
 # You will be running untrusted code on your machine!
 # You have been warned!
 
-USAGE="Usage: $0 (search|install) [-s site] package" 
+USAGE="Usage: $0 [-fn] [-s site] (search|install) package
+-f  fuck it - run all executable programs in the root of the project directory
+-n  dry run - download only, stop after cloning the project
+-s  SITE    - set the site to search and install code from"
 NAME="yapm" # used for creating config directories
 DATA_HOME="${XDG_DATA_HOME:-${HOME?Error must be set}/.local/share}/$NAME"
 
@@ -19,7 +24,7 @@ PATH="$TREE_DIR/bin:$TREE_DIR/usr/bin:$PATH" # so we can see things we've bootst
 #Default Options
 SITE="github.com"
 FUCK_IT=0
-DOWNLOAD_ONLY=1
+DOWNLOAD_ONLY=0
 
 # Debug Strings
 CLONE_FLAGS="--depth 1"
@@ -40,13 +45,27 @@ check_for_programs() {
     done
 }
 
+git_sync() {
+    if [ -d "$2/.git" ];then
+        cd $2
+        git pull
+        cd ..
+    else
+        git clone "https://github.com/$1" $CLONE_FLAGS # cloning an untrusted git repo can lead to CVE-2015-7545 on some systems
+    fi
+}
+
+#########################
+# Github
+#########################
+
 github_search() {
     query=$(echo "$1" | tr ' ' '+')
     curl $CURL_FLAGS "$github_api/search/repositories?q=$query" | jq -rM '.items[] | .full_name + " - " + .description'
 }
 
 github_fetch() {
-    if ! echo "$2" | grep -q '/';then      # only try to do the git install if the argument has a slash
+    if ! echo "$1" | grep -q '/';then      # only try to do the git install if the argument has a slash
         return
     fi
     repo_lang=$(curl $CURL_FLAGS "$github_api/repos/$1/languages" | jq 'keys_unsorted [0]' | tr -d \")
@@ -54,26 +73,29 @@ github_fetch() {
         echo "Error: Repository $1 not found!"
         return
     fi
-    user_name=$(echo $1 | "$AWK" -F'/' '{print $1}') #TODO make more efficient here
-    dir_name=$(echo $1 | "$AWK" -F'/' '{print $2}')
+    user_name=$(echo $1 | awk -F'/' '{print $1}') #TODO make more efficient here
+    dir_name=$(echo $1 | awk -F'/' '{print $2}')
     scd "$SITE_DIR/$user_name"
-    git clone "https://github.com/$1" "$CLONE_FLAGS" # cloning an untrusted git repo can lead to CVE-2015-7545 on some systems
+    git_sync "$1" "$dir_name"
 }
+#########################
 
 search() {
     case $SITE in
-        "github.com")  github_search "$@"
+        "github.com")  github_search "$1"
             ;;
         *)  echo "$0: Site $SITE not supported."
+            exit 1
             ;;
     esac
 }
 
 fetch() {
     case $SITE in
-        "github.com") github_fetch "$@"
+        "github.com") github_fetch "$1"
             ;;
         *)  echo "$0: Site $SITE not supported."
+            exit 1
             ;;
     esac
 }
@@ -152,13 +174,13 @@ main() {
             bootstrap_jq
             ;;
         search)
-            search "$@"
+            search "$2"
             ;;
         install)
             mkdir -p "$TREE_DIR"
-            fetch "$@"
+            fetch "$2"
             if [ "$DOWNLOAD_ONLY" -ne 1 ];then
-                build "$@"
+                build "$2"
             fi
             ;;
         uninstall)
@@ -189,10 +211,21 @@ while getopts "ns:" opt; do
         \?)  
             echo "$0: Unknown option -$OPTARG"
             echo "$USAGE"
+            exit 1
             ;;
     esac
 done
 
+# Remove Options from $@
+args=""
+prev=""
+for arg in $@;do
+    if ! [ ${arg:0:1} = "-" ] && ! [ "$prev" = "-s" ];then
+        args="$args $arg"
+    fi
+    prev="$arg"
+done
+set -- $args # we dont want quotes here
+
 check_for_programs
 main "$@"
-
