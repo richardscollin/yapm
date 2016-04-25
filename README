@@ -22,32 +22,26 @@ For now the user can handle installing libraries for
 any software that they may need.
 
 Supported Sources:
-github
+github.com
+gnu
 
 Future Goals:
 gitlab
-gnu ftp sites
 
-Ideas for flags
+Flags
 
--s, --source
+-s
     will set the source to find the code from
 
+-n
+    dry run. Don't try making or installing.
+
+-f
+    fuck it. Try to install by running all
+    executable files in the root of the project
+    directory.
+
 Ex.
-    yapm -s github libc
-
-
-We should read a configuration file to see
-which source we should search by default.
-
-No config just use github.
-
-We should also start building all of the software in a chroot.
-Is this supported on all Unixes? Other problems with this is
-it would require that yapm be run with root privledges. The
-user may not have those privileges. This could be an option
-
--r
-    Build the program in it's own chroot. (requires superuser privledges)
-
+    yapm -s gnu search libc
+    yapm search couch
 

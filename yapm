@@ -12,7 +12,8 @@ set -eu
 USAGE="Usage: $0 [-fn] [-s site] (search|install) package
 -f  fuck it - run all executable programs in the root of the project directory
 -n  dry run - download only, stop after cloning the project
--s  SITE    - set the site to search and install code from"
+-s  SITE    - set the site to search and install code from
+              supported sites: github.com gnu"
 NAME="yapm" # used for creating config directories
 DATA_HOME="${XDG_DATA_HOME:-${HOME?Error must be set}/.local/share}/$NAME"
 
@@ -60,6 +61,10 @@ git_sync() {
 #########################
 
 github_search() {
+    if [ -z "$1" ]; then
+        echo Empty search not allowed for github.
+        exit 1
+    fi
     query=$(echo "$1" | tr ' ' '+')
     curl $CURL_FLAGS "$github_api/search/repositories?q=$query" | jq -rM '.items[] | .full_name + " - " + .description'
 }
@@ -77,12 +82,36 @@ github_fetch() {
     dir_name=$(echo $1 | awk -F'/' '{print $2}')
     scd "$SITE_DIR/$user_name"
     git_sync "$1" "$dir_name"
+    cd "$dir_name"
+}
+#########################
+
+#########################
+# Gnu
+#########################
+
+gnu_search() {
+    curl $CURL_FLAGS "ftp://ftp.gnu.org/gnu/" --user anonymous: | awk '{print $9}' | grep --color=never "$1"
+}
+
+gnu_fetch() {
+    scd "$SITE_DIR/"
+    file=$(curl $CURL_FLAGS "ftp://ftp.gnu.org/gnu/$1/" --user anonymous: | awk '{print $6, $7, $8, $9}' \
+        | sort -k 3 -k 1M -k2 -r | head -n 1 | awk '{print $4}') # sort by date and assume they want the first one
+    file="${file%%.sig}" # remove .sig suffix if it exists
+    curl $CURL_FLAGS "ftp://ftp.gnu.org/gnu/$1/$file" --user anonymous: -o "$file"
+    tar -xf "$file"
+    file=${file%%.tar.gz}
+    file=${file%%.tar.xz}
+    cd "$file"
 }
 #########################
 
 search() {
     case $SITE in
         "github.com")  github_search "$1"
+            ;;
+        "gnu")  gnu_search "$1"
             ;;
         *)  echo "$0: Site $SITE not supported."
             exit 1
@@ -94,6 +123,8 @@ fetch() {
     case $SITE in
         "github.com") github_fetch "$1"
             ;;
+        "gnu")  gnu_fetch "$1"
+            ;;
         *)  echo "$0: Site $SITE not supported."
             exit 1
             ;;
@@ -101,18 +132,21 @@ fetch() {
 }
 
 build() {
-    cd "$dir_name"
     # Use Cmake to install
     if [ -f CMakeLists.txt ];then
         scd build
         cmake -DCMAKE_INSTALL_PREFIX="$TREE_DIR" ..
         make
         make install
+    elif [ -f configure ];then
+        scd build
+        ../configure --prefix="$TREE_DIR"
+        make
+        make install
     else
-        echo "Looks like $1 is written primarily in $repo_lang."
-        case $repo_lang in
+        echo "Looks like `pwd` is written primarily in $repo_lang."
+        case ${repo_lang:-} in
             "C")
-                [ -f configure ] && ./configure --prefix="$TREE_DIR"
                 make
                 make install
                 ;;
@@ -132,6 +166,7 @@ build() {
                         # Oh what a beautiful footgun!
                         find . -maxdepth 1 -executable -type f -exec {} \;
                         make
+                        make install
                     fi
                 fi
                 ;;
@@ -166,7 +201,7 @@ bootstrap_jq() {
 
 main() {
     mkdir -p "$DATA_HOME"
-    COMMAND=$1
+    COMMAND=${1:-}
 
     case $COMMAND in
         bootstrap)
@@ -174,13 +209,13 @@ main() {
             bootstrap_jq
             ;;
         search)
-            search "$2"
+            search "${2:-}"
             ;;
         install)
             mkdir -p "$TREE_DIR"
             fetch "$2"
             if [ "$DOWNLOAD_ONLY" -ne 1 ];then
-                build "$2"
+                build
             fi
             ;;
         uninstall)
@@ -204,7 +239,7 @@ while getopts "ns:" opt; do
         f)  FUCK_IT=1
             ;;
         s)  SITE="$OPTARG"
-            echo $OPTARG
+            SITE_DIR="$DATA_HOME/$SITE"
             ;;
         n)  DOWNLOAD_ONLY=1
             ;;
